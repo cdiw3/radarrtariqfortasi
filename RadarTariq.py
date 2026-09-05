@@ -11,7 +11,28 @@ FIX: Fixed global variable issues using st.session_state
 FIX: Added proper session state management
 ==================================================================================================
 """
+import subprocess
+import sys
 
+def install_packages():
+    """تثبيت المتطلبات تلقائياً"""
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", 
+            "--upgrade", "pip", "setuptools", "wheel"
+        ])
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            "streamlit", "yfinance", "pandas", "numpy",
+            "aiohttp", "aiofiles", "playwright", "nest-asyncio"
+        ])
+        subprocess.check_call(["playwright", "install", "chromium"])
+        print("✅ تم تثبيت جميع المتطلبات بنجاح!")
+    except Exception as e:
+        print(f"⚠️ خطأ في التثبيت: {e}")
+
+# شغل التثبيت
+install_packages()
 import os
 import sys
 import json
