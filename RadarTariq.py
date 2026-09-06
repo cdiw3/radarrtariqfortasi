@@ -7,82 +7,10 @@ Supervisor: Abdullah (Stocks Radar Project Director)
 Architecture: Streamlit Web Interface + Async Telegram Bot
 Market Target: Saudi Stock Exchange (TASI - 238 Assets & Sector Indices)
 ==================================================================================================
-FIX: Fixed compatibility with Python 3.14 and Streamlit Cloud
-FIX: Added automatic dependency installation
-FIX: Fixed all import issues
-==================================================================================================
 """
 
-# ================================================================================================
-# 🔧 FIX: تثبيت المتطلبات تلقائياً لـ Streamlit Cloud
-# ================================================================================================
-
-import subprocess
-import sys
 import os
-import warnings
-warnings.filterwarnings('ignore')
-
-def install_requirements():
-    """تثبيت المتطلبات تلقائياً مع توافق Python 3.14"""
-    try:
-        # تحديث pip أولاً
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "--upgrade", "pip", "--quiet"
-        ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        
-        # تثبيت setuptools و wheel
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", 
-            "setuptools>=68.0.0", "wheel>=0.41.0", "--quiet"
-        ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        
-        # تثبيت المتطلبات الرئيسية
-        packages = [
-            "streamlit>=1.28.0",
-            "yfinance>=0.2.33", 
-            "pandas>=2.2.0",
-            "numpy>=1.26.0",
-            "aiohttp>=3.9.0",
-            "aiofiles>=23.2.0",
-            "playwright>=1.40.0",
-            "nest-asyncio>=1.6.0"
-        ]
-        
-        for pkg in packages:
-            try:
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", pkg, "--quiet"
-                ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            except:
-                # حاول بدون إصدار محدد
-                pkg_name = pkg.split(">=")[0]
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", pkg_name, "--quiet"
-                ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        
-        # تثبيت متصفح Playwright
-        subprocess.check_call(["playwright", "install", "chromium"], 
-                            stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-        
-        print("✅ تم تثبيت جميع المتطلبات بنجاح!")
-        return True
-    except Exception as e:
-        print(f"⚠️ خطأ في التثبيت: {e}")
-        return False
-
-# تشغيل التثبيت (مرة واحدة فقط)
-if not os.path.exists("/tmp/requirements_installed"):
-    try:
-        install_requirements()
-        open("/tmp/requirements_installed", "w").close()
-    except:
-        pass
-
-# ================================================================================================
-# 📦 استيراد المكتبات
-# ================================================================================================
-
+import sys
 import json
 import math
 import time
@@ -90,7 +18,6 @@ import asyncio
 import logging
 import datetime
 import threading
-import nest_asyncio
 from logging.handlers import RotatingFileHandler
 import numpy as np
 import pandas as pd
@@ -98,14 +25,7 @@ import yfinance as yf
 import aiohttp
 import aiofiles
 import streamlit as st
-
-# محاولة استيراد playwright مع معالجة الأخطاء
-try:
-    from playwright.async_api import async_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except Exception as e:
-    PLAYWRIGHT_AVAILABLE = False
-    print(f"⚠️ Playwright غير متوفر: {e}")
+from playwright.async_api import async_playwright
 
 # ================================================================================================
 # ⚙️ SYSTEM CORE ENVIRONMENT VARIABLES & CONSTANTS DEFINITION
@@ -150,17 +70,14 @@ log_formatter = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-try:
-    file_handler = RotatingFileHandler(
-        filename=SYSTEM_LOG_FILE,
-        maxBytes=30 * 1024 * 1024,
-        backupCount=10,
-        encoding="utf-8"
-    )
-    file_handler.setFormatter(log_formatter)
-    logger.addHandler(file_handler)
-except:
-    pass
+file_handler = RotatingFileHandler(
+    filename=SYSTEM_LOG_FILE,
+    maxBytes=30 * 1024 * 1024,
+    backupCount=10,
+    encoding="utf-8"
+)
+file_handler.setFormatter(log_formatter)
+logger.addHandler(file_handler)
 
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
@@ -186,7 +103,7 @@ def load_system_storage_matrices():
             with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as file_node:
                 raw_data = json.load(file_node)
                 subscribers = [int(user_id) for user_id in raw_data]
-                logger.info(f"Loaded {len(subscribers)} authorized premium users.")
+                logger.info(f"Loaded {len(subscribers)} authorized premium users into active matrix.")
         except Exception as error:
             logger.error(f"Critical error mapping subscribers JSON repository: {error}")
             subscribers = []
@@ -221,60 +138,18 @@ def load_system_storage_matrices():
     
     return subscribers, radar_active, public_mode, portfolios
 
-# Load data
-loaded_subscribers, loaded_radar_active, loaded_public_mode, loaded_portfolios = load_system_storage_matrices()
-
 # ================================================================================================
 # 🎛️ STREAMLIT SESSION STATE INITIALIZATION
 # ================================================================================================
 
-if "RADAR_ACTIVE" not in st.session_state:
+# Initialize session state
+if "initialized" not in st.session_state:
+    loaded_subscribers, loaded_radar_active, loaded_public_mode, loaded_portfolios = load_system_storage_matrices()
     st.session_state.RADAR_ACTIVE = loaded_radar_active
-if "PUBLIC_MODE" not in st.session_state:
     st.session_state.PUBLIC_MODE = loaded_public_mode
-if "SUBSCRIBERS" not in st.session_state:
     st.session_state.SUBSCRIBERS = loaded_subscribers
-if "PORTFOLIOS" not in st.session_state:
     st.session_state.PORTFOLIOS = loaded_portfolios
-
-# Sync globals with session state
-RADAR_ACTIVE = st.session_state.RADAR_ACTIVE
-PUBLIC_MODE = st.session_state.PUBLIC_MODE
-SUBSCRIBERS = st.session_state.SUBSCRIBERS
-PORTFOLIOS = st.session_state.PORTFOLIOS
-
-async def flush_subscribers_to_disk():
-    """Asynchronously flushes premium subscriber tables down to non-volatile memory block."""
-    try:
-        async with aiofiles.open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as file_handle:
-            serialized_payload = json.dumps(st.session_state.SUBSCRIBERS, ensure_ascii=False, indent=4)
-            await file_handle.write(serialized_payload)
-            logger.debug("Premium subscriber table successfully synchronization flushed.")
-    except Exception as error:
-        logger.error(f"Failed to execute asynchronous flush on subscriber node: {error}")
-
-async def flush_settings_to_disk():
-    """Asynchronously flushes runtime engine environmental constraints to permanent file storage."""
-    try:
-        async with aiofiles.open(SETTINGS_FILE, "w", encoding="utf-8") as file_handle:
-            payload = {
-                "RADAR_ACTIVE": st.session_state.RADAR_ACTIVE, 
-                "PUBLIC_MODE": st.session_state.PUBLIC_MODE
-            }
-            await file_handle.write(json.dumps(payload, ensure_ascii=False, indent=4))
-            logger.debug("System operational global settings synchronized on disk.")
-    except Exception as error:
-        logger.error(f"Failed to execute asynchronous flush on settings node: {error}")
-
-async def flush_portfolios_to_disk():
-    """Asynchronously structuralizes user assets, buys, and capital allocations to persistent registry."""
-    try:
-        async with aiofiles.open(PORTFOLIO_FILE, "w", encoding="utf-8") as file_handle:
-            serialized_payload = json.dumps(st.session_state.PORTFOLIOS, ensure_ascii=False, indent=4)
-            await file_handle.write(serialized_payload)
-            logger.debug("User assets portfolio maps updated across flash hardware blocks.")
-    except Exception as error:
-        logger.error(f"Failed to execute asynchronous flush on portfolio node: {error}")
+    st.session_state.initialized = True
 
 # ================================================================================================
 # 🇸🇦 THE MASTER TASI WATCHLIST MATRIX (ALL 238 ASSETS & SECTORS COMPLETELY CODED)
@@ -353,7 +228,9 @@ def resolve_asset_arabic_name(ticker_symbol):
 # ================================================================================================
 
 def calculate_advanced_quantitative_confluence(df_daily, df_weekly, user_portfolio_context=None):
-    """Executes vectorized NumPy and Pandas calculations over pricing tensors."""
+    """
+    Executes vectorized NumPy and Pandas calculations over pricing tensors.
+    """
     try:
         if df_daily is None or df_weekly is None or df_daily.empty or df_weekly.empty:
             return None
@@ -557,37 +434,46 @@ def calculate_advanced_quantitative_confluence(df_daily, df_weekly, user_portfol
 # 🌐 HIGH-PERFORMANCE DATA PACKAGING & YFINANCE STREAMER HARVESTING SUBSYSTEM
 # ================================================================================================
 
-async def fetch_bulk_ticker_data_tensor(ticker_list, period_d="90d", period_w="2y"):
-    """Executes bulk network operations to query structural prices for all 238 companies simultaneously."""
-    logger.info(f"Executing high-speed concurrent network data download for {len(ticker_list)} assets...")
+def sync_fetch_bulk_ticker_data(ticker_list, period_d="90d", period_w="2y"):
+    """Synchronous wrapper for fetching bulk data."""
     try:
-        execution_loop = asyncio.get_event_loop()
-        
-        daily_dataframe_tensor = await execution_loop.run_in_executor(
-            None, 
-            lambda: yf.download(tickers=ticker_list, period=period_d, interval="1d", group_by="ticker", progress=False, auto_adjust=True)
+        daily_dataframe_tensor = yf.download(
+            tickers=ticker_list, 
+            period=period_d, 
+            interval="1d", 
+            group_by="ticker", 
+            progress=False, 
+            auto_adjust=True
         )
         
-        weekly_dataframe_tensor = await execution_loop.run_in_executor(
-            None, 
-            lambda: yf.download(tickers=ticker_list, period=period_w, interval="1wk", group_by="ticker", progress=False, auto_adjust=True)
+        weekly_dataframe_tensor = yf.download(
+            tickers=ticker_list, 
+            period=period_w, 
+            interval="1wk", 
+            group_by="ticker", 
+            progress=False, 
+            auto_adjust=True
         )
         
-        logger.info("Bulk parallel financial tensor retrieval operations accomplished successfully.")
         return daily_dataframe_tensor, weekly_dataframe_tensor
     except Exception as error:
         logger.error(f"Fatal error streaming real-time bulk data pipelines via yfinance mirrors: {error}")
         return pd.DataFrame(), pd.DataFrame()
 
-async def perform_single_asset_quant_audit(asset_code):
-    """Fetches high fidelity localized historical data points to audit a single standalone company."""
+async def fetch_bulk_ticker_data_tensor(ticker_list, period_d="90d", period_w="2y"):
+    """Executes bulk network operations to query structural prices for all 238 companies simultaneously."""
+    logger.info(f"Executing high-speed concurrent network data download for {len(ticker_list)} assets...")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_fetch_bulk_ticker_data, ticker_list, period_d, period_w)
+
+def sync_fetch_single_asset(asset_code):
+    """Synchronous fetch for single asset."""
     try:
         if not asset_code.endswith(".SR"):
             asset_code += ".SR"
             
-        execution_loop = asyncio.get_event_loop()
-        daily_historical_df = await execution_loop.run_in_executor(None, lambda: yf.download(asset_code, period="90d", interval="1d", progress=False, auto_adjust=True))
-        weekly_historical_df = await execution_loop.run_in_executor(None, lambda: yf.download(asset_code, period="2y", interval="1wk", progress=False, auto_adjust=True))
+        daily_historical_df = yf.download(asset_code, period="90d", interval="1d", progress=False, auto_adjust=True)
+        weekly_historical_df = yf.download(asset_code, period="2y", interval="1wk", progress=False, auto_adjust=True)
         
         if daily_historical_df.empty or len(daily_historical_df) < 35 or weekly_historical_df.empty or len(weekly_historical_df) < 12:
             return None
@@ -597,20 +483,18 @@ async def perform_single_asset_quant_audit(asset_code):
         logger.error(f"Single asset quantum auditing computation error on ticker symbol {asset_code}: {error}")
         return None
 
-async def generate_tasi_index_status_payload():
-    """Fetches real-time market telemetry metrics for the headline TASI index."""
+async def perform_single_asset_quant_audit(asset_code):
+    """Fetches high fidelity localized historical data points to audit a single standalone company."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_fetch_single_asset, asset_code)
+
+def sync_generate_tasi_index_status():
+    """Synchronous version of index status."""
     try:
-        execution_loop = asyncio.get_event_loop()
-        dataframe_node = await execution_loop.run_in_executor(
-            None, 
-            lambda: yf.download("^TASI.SR", period="5d", progress=False, auto_adjust=True)
-        )
+        dataframe_node = yf.download("^TASI.SR", period="5d", progress=False, auto_adjust=True)
         
         if dataframe_node.empty or len(dataframe_node) < 2:
-            dataframe_node = await execution_loop.run_in_executor(
-                None, 
-                lambda: yf.download("2222.SR", period="5d", progress=False, auto_adjust=True)
-            )
+            dataframe_node = yf.download("2222.SR", period="5d", progress=False, auto_adjust=True)
             if dataframe_node.empty or len(dataframe_node) < 2:
                 return "❌ تعذر الاتصال بمحرك تاسي وسيرفرات ياهو فاينانس حالياً، جاري الإنعاش الآلي للاتصال."
                 
@@ -645,11 +529,30 @@ async def generate_tasi_index_status_payload():
         logger.error(f"Failed to compile market index status payload: {error}")
         return f"❌ خطأ فني غير متوقع أثناء تجميع حزم مصفوفة المؤشر العام: {str(error)}"
 
-async def execute_global_investment_sweep_pipeline():
-    """Performs full portfolio scan across all 238 companies concurrently."""
+async def generate_tasi_index_status_payload():
+    """Fetches real-time market telemetry metrics for the headline TASI index."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_generate_tasi_index_status)
+
+def sync_execute_global_investment_sweep():
+    """Synchronous version of investment sweep."""
     optimal_investment_candidates = []
     
-    daily_tensor, weekly_tensor = await fetch_bulk_ticker_data_tensor(WATCHLIST)
+    daily_tensor, weekly_tensor = yf.download(
+        tickers=WATCHLIST, 
+        period="90d", 
+        interval="1d", 
+        group_by="ticker", 
+        progress=False, 
+        auto_adjust=True
+    ), yf.download(
+        tickers=WATCHLIST, 
+        period="2y", 
+        interval="1wk", 
+        group_by="ticker", 
+        progress=False, 
+        auto_adjust=True
+    )
     
     if daily_tensor.empty or weekly_tensor.empty:
         return "❌ فشل محرك الفحص الاستثماري في سحب وقراءة مصفوفة بيانات تاسي المجمعة. جاري محاولة جدولة الإنعاش."
@@ -708,6 +611,11 @@ async def execute_global_investment_sweep_pipeline():
     compiled_sweep_report += "\n💡 *توجيه فني من المستشار الرقمي لرادار الأسهم:* هذه الشركات هي الأرقى هيكلياً لبناء مراكز استثمارية متدرجة القيمة لمدراء المحافظ الاستثمارية المتوسطة والكبرى."
     return compiled_sweep_report
 
+async def execute_global_investment_sweep_pipeline():
+    """Performs full portfolio scan across all 238 companies concurrently."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_execute_global_investment_sweep)
+
 # ================================================================================================
 # 🛡️ TELEGRAM COMMUNICATION FUNCTIONS
 # ================================================================================================
@@ -737,10 +645,6 @@ async def send_telegram_msg(message_content):
 
 async def capture_tradingview_chart(asset_code, quant_results):
     """Launches Playwright, logs into TradingView, injects levels, and takes a screenshot."""
-    if not PLAYWRIGHT_AVAILABLE:
-        logger.warning("Playwright not available, skipping chart capture")
-        return None
-        
     TRADINGVIEW_USERNAME = "abdrt12@gmail.com"
     TRADINGVIEW_PASSWORD = "Aa1400Aa@!wafc"
     
@@ -767,7 +671,7 @@ async def capture_tradingview_chart(asset_code, quant_results):
         f"]&theme=dark"
     )
     
-    image_path = f"/tmp/tv_chart_{clean_code}.png"
+    image_path = f"tv_chart_{clean_code}.png"
     
     try:
         logger.info(f"Launching Playwright to capture chart for {clean_code}...")
@@ -775,7 +679,7 @@ async def capture_tradingview_chart(asset_code, quant_results):
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
+                args=['--disable-blink-features=AutomationControlled']
             )
             context = await browser.new_context(
                 viewport={"width": 1920, "height": 1080},
@@ -879,6 +783,30 @@ async def send_telegram_photo(image_path, caption=""):
 # ================================================================================================
 # 🔄 TELEGRAM BOT BACKGROUND THREAD
 # ================================================================================================
+
+# Define async functions for disk operations
+async def flush_subscribers_to_disk():
+    """Asynchronously flushes premium subscriber tables down to non-volatile memory block."""
+    try:
+        async with aiofiles.open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as file_handle:
+            serialized_payload = json.dumps(st.session_state.SUBSCRIBERS, ensure_ascii=False, indent=4)
+            await file_handle.write(serialized_payload)
+            logger.debug("Premium subscriber table successfully synchronization flushed.")
+    except Exception as error:
+        logger.error(f"Failed to execute asynchronous flush on subscriber node: {error}")
+
+async def flush_settings_to_disk():
+    """Asynchronously flushes runtime engine environmental constraints to permanent file storage."""
+    try:
+        async with aiofiles.open(SETTINGS_FILE, "w", encoding="utf-8") as file_handle:
+            payload = {
+                "RADAR_ACTIVE": st.session_state.RADAR_ACTIVE, 
+                "PUBLIC_MODE": st.session_state.PUBLIC_MODE
+            }
+            await file_handle.write(json.dumps(payload, ensure_ascii=False, indent=4))
+            logger.debug("System operational global settings synchronized on disk.")
+    except Exception as error:
+        logger.error(f"Failed to execute asynchronous flush on settings node: {error}")
 
 async def core_telegram_updates_listener_daemon():
     """Decentralized listener loop that handles text messaging updates."""
@@ -1043,7 +971,7 @@ async def core_telegram_updates_listener_daemon():
                                             else:
                                                 comprehensive_report_template += "🛑 *تنبيه مخاطرة:* يوصى بتجنب الدخول حالياً والبحث عن فرص أخرى."
                                             
-                                            if is_chart_requested and PLAYWRIGHT_AVAILABLE:
+                                            if is_chart_requested:
                                                 await send_telegram_msg(f"⏳ جاري التقاط الشارت البياني لـ {arabic_mapped_name} ...")
                                                 
                                                 tv_image = await capture_tradingview_chart(target_stock_code, audit_results)
@@ -1098,7 +1026,11 @@ async def core_telegram_updates_listener_daemon():
 
 def run_telegram_bot_background():
     """Run the Telegram bot in a background thread with its own event loop."""
-    nest_asyncio.apply()
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except:
+        pass
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1121,18 +1053,25 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Apply custom CSS for better Arabic support
+# Apply custom CSS with Segoe UI Regular
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Segoe+UI&display=swap');
+    
+    * {
+        font-family: 'Segoe UI', 'Arial', sans-serif;
+    }
+    
     .main-header {
         font-size: 2.5rem;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
         margin-bottom: 1rem;
+        font-family: 'Segoe UI', sans-serif;
     }
     .arabic-text {
-        font-family: 'Arial', 'Times New Roman', serif;
+        font-family: 'Segoe UI', 'Arial', sans-serif;
         direction: rtl;
         text-align: right;
     }
@@ -1142,6 +1081,7 @@ st.markdown("""
         border-radius: 5px;
         padding: 10px;
         margin: 10px 0;
+        font-family: 'Segoe UI', sans-serif;
     }
     .warning-box {
         background-color: #fff3cd;
@@ -1149,6 +1089,7 @@ st.markdown("""
         border-radius: 5px;
         padding: 10px;
         margin: 10px 0;
+        font-family: 'Segoe UI', sans-serif;
     }
     .danger-box {
         background-color: #f8d7da;
@@ -1156,6 +1097,7 @@ st.markdown("""
         border-radius: 5px;
         padding: 10px;
         margin: 10px 0;
+        font-family: 'Segoe UI', sans-serif;
     }
     .info-box {
         background-color: #d1ecf1;
@@ -1163,18 +1105,41 @@ st.markdown("""
         border-radius: 5px;
         padding: 10px;
         margin: 10px 0;
+        font-family: 'Segoe UI', sans-serif;
     }
     div[data-testid="stExpander"] {
         direction: rtl;
         text-align: right;
+        font-family: 'Segoe UI', sans-serif;
     }
     .stButton button {
         width: 100%;
         border-radius: 5px;
         font-weight: bold;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .stMarkdown, .stText, .stMetric, .stCode {
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .st-emotion-cache-1v3fvcr {
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .st-emotion-cache-1r4qj8v {
+        font-family: 'Segoe UI', sans-serif;
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Helper function to run async functions in Streamlit
+def run_async(coro):
+    """Run an async coroutine in a new event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(coro)
+        return result
+    finally:
+        loop.close()
 
 # Sidebar
 with st.sidebar:
@@ -1202,7 +1167,6 @@ with st.sidebar:
 /تحليل [الرمز] - تحليل سهم
 /تحليل_بياني [الرمز] - تحليل مع شارت
 /[الرمز] - كشف سريع
-/محفظة - عرض المحفظة
 """, language="bash")
 
 # Main content
@@ -1221,10 +1185,7 @@ with tab1:
         if st.button("🔄 تحديث تقرير السوق", use_container_width=True):
             with st.spinner("جاري جلب بيانات السوق..."):
                 try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    result = loop.run_until_complete(generate_tasi_index_status_payload())
-                    loop.close()
+                    result = run_async(generate_tasi_index_status_payload())
                     st.markdown(result)
                 except Exception as e:
                     st.error(f"خطأ: {e}")
@@ -1258,10 +1219,7 @@ with tab2:
             if stock_code_input.isdigit() and len(stock_code_input) == 4:
                 with st.spinner(f"جاري تحليل السهم {stock_code_input}..."):
                     try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        
-                        audit_results = loop.run_until_complete(perform_single_asset_quant_audit(stock_code_input))
+                        audit_results = run_async(perform_single_asset_quant_audit(stock_code_input))
                         
                         if audit_results:
                             arabic_name = resolve_asset_arabic_name(stock_code_input)
@@ -1302,12 +1260,12 @@ with tab2:
                                         st.metric("🚀 الهدف الثاني", f"{audit_results['target_2']} ر.س")
                                         st.metric("📊 RSI الأسبوعي", audit_results['rsi_w'])
                             
-                            if show_chart and PLAYWRIGHT_AVAILABLE:
+                            if show_chart and "✅" in audit_results["decision"]:
                                 st.markdown("---")
                                 st.markdown("### 📸 شارت TradingView")
                                 with st.spinner("جاري التقاط الشارت..."):
                                     try:
-                                        chart_image = loop.run_until_complete(capture_tradingview_chart(stock_code_input, audit_results))
+                                        chart_image = run_async(capture_tradingview_chart(stock_code_input, audit_results))
                                         if chart_image and os.path.exists(chart_image):
                                             st.image(chart_image, caption=f"📈 شارت سهم {arabic_name}", use_column_width=True)
                                             try:
@@ -1318,12 +1276,8 @@ with tab2:
                                             st.warning("⚠️ تعذر التقاط الشارت من TradingView")
                                     except Exception as e:
                                         st.error(f"خطأ في التقاط الشارت: {e}")
-                            elif show_chart and not PLAYWRIGHT_AVAILABLE:
-                                st.warning("⚠️ ميزة الشارت غير متوفرة حالياً (Playwright غير مثبت)")
                         else:
                             st.error(f"❌ فشل تحليل السهم `{stock_code_input}`. يرجى التأكد من صحة الرمز.")
-                        
-                        loop.close()
                     except Exception as e:
                         st.error(f"خطأ: {e}")
             else:
@@ -1339,10 +1293,7 @@ with tab3:
     if st.button("🚀 تشغيل الفحص الشامل", use_container_width=True):
         with st.spinner("⏳ جاري فحص جميع الأسهم واستخراج الفرص الاستثمارية الكبرى..."):
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(execute_global_investment_sweep_pipeline())
-                loop.close()
+                result = run_async(execute_global_investment_sweep_pipeline())
                 
                 st.markdown("### 📊 نتائج الفحص الاستثماري")
                 st.markdown(result)
@@ -1375,10 +1326,7 @@ with tab4:
                 target_id = int(new_user_id)
                 if target_id not in st.session_state.SUBSCRIBERS:
                     st.session_state.SUBSCRIBERS.append(target_id)
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(flush_subscribers_to_disk())
-                    loop.close()
+                    run_async(flush_subscribers_to_disk())
                     st.success(f"✅ تم إضافة المستخدم {target_id} بنجاح")
                     st.rerun()
                 else:
@@ -1393,10 +1341,7 @@ with tab4:
                 target_id = int(remove_user_id)
                 if target_id in st.session_state.SUBSCRIBERS:
                     st.session_state.SUBSCRIBERS.remove(target_id)
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(flush_subscribers_to_disk())
-                    loop.close()
+                    run_async(flush_subscribers_to_disk())
                     st.success(f"✅ تم حذف المستخدم {target_id} بنجاح")
                     st.rerun()
                 else:
@@ -1415,19 +1360,13 @@ with tab4:
         with col_btn1:
             if st.button("🟢 تشغيل الرادار", use_container_width=True):
                 st.session_state.RADAR_ACTIVE = True
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(flush_settings_to_disk())
-                loop.close()
+                run_async(flush_settings_to_disk())
                 st.success("✅ تم تشغيل الرادار")
                 st.rerun()
         with col_btn2:
             if st.button("🔴 إيقاف الرادار", use_container_width=True):
                 st.session_state.RADAR_ACTIVE = False
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(flush_settings_to_disk())
-                loop.close()
+                run_async(flush_settings_to_disk())
                 st.success("✅ تم إيقاف الرادار")
                 st.rerun()
         
@@ -1441,19 +1380,13 @@ with tab4:
         with col_btn3:
             if st.button("🔓 تفعيل الوضع العام", use_container_width=True):
                 st.session_state.PUBLIC_MODE = True
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(flush_settings_to_disk())
-                loop.close()
+                run_async(flush_settings_to_disk())
                 st.success("✅ تم تفعيل الوضع العام")
                 st.rerun()
         with col_btn4:
             if st.button("🔒 تفعيل الوضع الخاص", use_container_width=True):
                 st.session_state.PUBLIC_MODE = False
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(flush_settings_to_disk())
-                loop.close()
+                run_async(flush_settings_to_disk())
                 st.success("✅ تم تفعيل الوضع الخاص")
                 st.rerun()
         
@@ -1476,7 +1409,7 @@ with tab4:
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #666; padding: 20px;">
+<div style="text-align: center; color: #666; padding: 20px; font-family: 'Segoe UI', sans-serif;">
     <p>🇸🇦 نظام رادار تاسي الكمي - الإصدار 3.8.1</p>
     <p>المشرف: Abdullah (Stocks Radar Project Director)</p>
     <p style="font-size: 0.8rem;">يتم تحديث البيانات من Yahoo Finance و TradingView</p>
@@ -1490,6 +1423,7 @@ st.markdown("""
 def start_telegram_bot():
     """Start the Telegram bot in a background thread."""
     try:
+        import nest_asyncio
         nest_asyncio.apply()
     except:
         pass
@@ -1502,25 +1436,12 @@ def start_telegram_bot():
 # Start the Telegram bot in background
 if "bot_started" not in st.session_state:
     try:
-        # Check if playwright is installed
-        try:
-            import playwright
-            st.session_state.playwright_available = True
-        except:
-            st.session_state.playwright_available = False
-            
-        # Install playwright if needed
-        if st.session_state.playwright_available:
-            try:
-                import subprocess
-                subprocess.run(["playwright", "install", "chromium"], 
-                             capture_output=True, timeout=300)
-                logger.info("✅ Playwright chromium installed")
-            except Exception as e:
-                logger.warning(f"Could not install playwright: {e}")
-        
-        st.session_state.bot_thread = start_telegram_bot()
-        st.session_state.bot_started = True
-        logger.info("✅ System initialized with Streamlit interface")
+        import subprocess
+        subprocess.run(["playwright", "install", "chromium"], capture_output=True)
+        logger.info("✅ Playwright chromium installed")
     except Exception as e:
-        logger.error(f"Startup error: {e}")
+        logger.warning(f"Could not install playwright: {e}")
+    
+    st.session_state.bot_thread = start_telegram_bot()
+    st.session_state.bot_started = True
+    logger.info("✅ System initialized with Streamlit interface")
