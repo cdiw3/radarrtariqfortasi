@@ -2,9 +2,3 @@ streamlit
 yfinance
 pandas
 numpy
-aiohttp
-aiofiles
-playwright
-nest-asyncio
-setuptools
-wheel
