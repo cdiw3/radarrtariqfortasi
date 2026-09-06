@@ -7,34 +7,82 @@ Supervisor: Abdullah (Stocks Radar Project Director)
 Architecture: Streamlit Web Interface + Async Telegram Bot
 Market Target: Saudi Stock Exchange (TASI - 238 Assets & Sector Indices)
 ==================================================================================================
-FIX: Fixed global variable issues using st.session_state
-FIX: Added proper session state management
+FIX: Fixed compatibility with Python 3.14 and Streamlit Cloud
+FIX: Added automatic dependency installation
+FIX: Fixed all import issues
 ==================================================================================================
 """
+
+# ================================================================================================
+# 🔧 FIX: تثبيت المتطلبات تلقائياً لـ Streamlit Cloud
+# ================================================================================================
+
 import subprocess
 import sys
+import os
+import warnings
+warnings.filterwarnings('ignore')
 
-def install_packages():
-    """تثبيت المتطلبات تلقائياً"""
+def install_requirements():
+    """تثبيت المتطلبات تلقائياً مع توافق Python 3.14"""
     try:
+        # تحديث pip أولاً
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "--upgrade", "pip", "--quiet"
+        ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        
+        # تثبيت setuptools و wheel
         subprocess.check_call([
             sys.executable, "-m", "pip", "install", 
-            "--upgrade", "pip", "setuptools", "wheel"
-        ])
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install",
-            "streamlit", "yfinance", "pandas", "numpy",
-            "aiohttp", "aiofiles", "playwright", "nest-asyncio"
-        ])
-        subprocess.check_call(["playwright", "install", "chromium"])
+            "setuptools>=68.0.0", "wheel>=0.41.0", "--quiet"
+        ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        
+        # تثبيت المتطلبات الرئيسية
+        packages = [
+            "streamlit>=1.28.0",
+            "yfinance>=0.2.33", 
+            "pandas>=2.2.0",
+            "numpy>=1.26.0",
+            "aiohttp>=3.9.0",
+            "aiofiles>=23.2.0",
+            "playwright>=1.40.0",
+            "nest-asyncio>=1.6.0"
+        ]
+        
+        for pkg in packages:
+            try:
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", pkg, "--quiet"
+                ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            except:
+                # حاول بدون إصدار محدد
+                pkg_name = pkg.split(">=")[0]
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", pkg_name, "--quiet"
+                ], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        
+        # تثبيت متصفح Playwright
+        subprocess.check_call(["playwright", "install", "chromium"], 
+                            stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        
         print("✅ تم تثبيت جميع المتطلبات بنجاح!")
+        return True
     except Exception as e:
         print(f"⚠️ خطأ في التثبيت: {e}")
+        return False
 
-# شغل التثبيت
-install_packages()
-import os
-import sys
+# تشغيل التثبيت (مرة واحدة فقط)
+if not os.path.exists("/tmp/requirements_installed"):
+    try:
+        install_requirements()
+        open("/tmp/requirements_installed", "w").close()
+    except:
+        pass
+
+# ================================================================================================
+# 📦 استيراد المكتبات
+# ================================================================================================
+
 import json
 import math
 import time
@@ -50,7 +98,14 @@ import yfinance as yf
 import aiohttp
 import aiofiles
 import streamlit as st
-from playwright.async_api import async_playwright
+
+# محاولة استيراد playwright مع معالجة الأخطاء
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except Exception as e:
+    PLAYWRIGHT_AVAILABLE = False
+    print(f"⚠️ Playwright غير متوفر: {e}")
 
 # ================================================================================================
 # ⚙️ SYSTEM CORE ENVIRONMENT VARIABLES & CONSTANTS DEFINITION
@@ -95,14 +150,17 @@ log_formatter = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-file_handler = RotatingFileHandler(
-    filename=SYSTEM_LOG_FILE,
-    maxBytes=30 * 1024 * 1024,
-    backupCount=10,
-    encoding="utf-8"
-)
-file_handler.setFormatter(log_formatter)
-logger.addHandler(file_handler)
+try:
+    file_handler = RotatingFileHandler(
+        filename=SYSTEM_LOG_FILE,
+        maxBytes=30 * 1024 * 1024,
+        backupCount=10,
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(log_formatter)
+    logger.addHandler(file_handler)
+except:
+    pass
 
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
@@ -128,7 +186,7 @@ def load_system_storage_matrices():
             with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as file_node:
                 raw_data = json.load(file_node)
                 subscribers = [int(user_id) for user_id in raw_data]
-                logger.info(f"Loaded {len(subscribers)} authorized premium users into active matrix.")
+                logger.info(f"Loaded {len(subscribers)} authorized premium users.")
         except Exception as error:
             logger.error(f"Critical error mapping subscribers JSON repository: {error}")
             subscribers = []
@@ -295,9 +353,7 @@ def resolve_asset_arabic_name(ticker_symbol):
 # ================================================================================================
 
 def calculate_advanced_quantitative_confluence(df_daily, df_weekly, user_portfolio_context=None):
-    """
-    Executes vectorized NumPy and Pandas calculations over pricing tensors.
-    """
+    """Executes vectorized NumPy and Pandas calculations over pricing tensors."""
     try:
         if df_daily is None or df_weekly is None or df_daily.empty or df_weekly.empty:
             return None
@@ -681,6 +737,10 @@ async def send_telegram_msg(message_content):
 
 async def capture_tradingview_chart(asset_code, quant_results):
     """Launches Playwright, logs into TradingView, injects levels, and takes a screenshot."""
+    if not PLAYWRIGHT_AVAILABLE:
+        logger.warning("Playwright not available, skipping chart capture")
+        return None
+        
     TRADINGVIEW_USERNAME = "abdrt12@gmail.com"
     TRADINGVIEW_PASSWORD = "Aa1400Aa@!wafc"
     
@@ -707,7 +767,7 @@ async def capture_tradingview_chart(asset_code, quant_results):
         f"]&theme=dark"
     )
     
-    image_path = f"tv_chart_{clean_code}.png"
+    image_path = f"/tmp/tv_chart_{clean_code}.png"
     
     try:
         logger.info(f"Launching Playwright to capture chart for {clean_code}...")
@@ -715,7 +775,7 @@ async def capture_tradingview_chart(asset_code, quant_results):
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=['--disable-blink-features=AutomationControlled']
+                args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
             )
             context = await browser.new_context(
                 viewport={"width": 1920, "height": 1080},
@@ -983,7 +1043,7 @@ async def core_telegram_updates_listener_daemon():
                                             else:
                                                 comprehensive_report_template += "🛑 *تنبيه مخاطرة:* يوصى بتجنب الدخول حالياً والبحث عن فرص أخرى."
                                             
-                                            if is_chart_requested:
+                                            if is_chart_requested and PLAYWRIGHT_AVAILABLE:
                                                 await send_telegram_msg(f"⏳ جاري التقاط الشارت البياني لـ {arabic_mapped_name} ...")
                                                 
                                                 tv_image = await capture_tradingview_chart(target_stock_code, audit_results)
@@ -1242,7 +1302,7 @@ with tab2:
                                         st.metric("🚀 الهدف الثاني", f"{audit_results['target_2']} ر.س")
                                         st.metric("📊 RSI الأسبوعي", audit_results['rsi_w'])
                             
-                            if show_chart:
+                            if show_chart and PLAYWRIGHT_AVAILABLE:
                                 st.markdown("---")
                                 st.markdown("### 📸 شارت TradingView")
                                 with st.spinner("جاري التقاط الشارت..."):
@@ -1258,6 +1318,8 @@ with tab2:
                                             st.warning("⚠️ تعذر التقاط الشارت من TradingView")
                                     except Exception as e:
                                         st.error(f"خطأ في التقاط الشارت: {e}")
+                            elif show_chart and not PLAYWRIGHT_AVAILABLE:
+                                st.warning("⚠️ ميزة الشارت غير متوفرة حالياً (Playwright غير مثبت)")
                         else:
                             st.error(f"❌ فشل تحليل السهم `{stock_code_input}`. يرجى التأكد من صحة الرمز.")
                         
@@ -1440,12 +1502,25 @@ def start_telegram_bot():
 # Start the Telegram bot in background
 if "bot_started" not in st.session_state:
     try:
-        import subprocess
-        subprocess.run(["playwright", "install", "chromium"], capture_output=True)
-        logger.info("✅ Playwright chromium installed")
+        # Check if playwright is installed
+        try:
+            import playwright
+            st.session_state.playwright_available = True
+        except:
+            st.session_state.playwright_available = False
+            
+        # Install playwright if needed
+        if st.session_state.playwright_available:
+            try:
+                import subprocess
+                subprocess.run(["playwright", "install", "chromium"], 
+                             capture_output=True, timeout=300)
+                logger.info("✅ Playwright chromium installed")
+            except Exception as e:
+                logger.warning(f"Could not install playwright: {e}")
+        
+        st.session_state.bot_thread = start_telegram_bot()
+        st.session_state.bot_started = True
+        logger.info("✅ System initialized with Streamlit interface")
     except Exception as e:
-        logger.warning(f"Could not install playwright: {e}")
-    
-    st.session_state.bot_thread = start_telegram_bot()
-    st.session_state.bot_started = True
-    logger.info("✅ System initialized with Streamlit interface")
+        logger.error(f"Startup error: {e}")
